@@ -1,0 +1,340 @@
+---
+title: "Applying the Bradley-Terry Framework to Soccer"
+author: "Helen Chen, Carolyn Chen, and Nagaprasad Rudrapatna"
+format: pdf
+bibliography: references.bib
+editor: visual
+---
+```{r load-packages, message = FALSE, echo = FALSE}
+library(tidyverse)
+library(ggplot2)
+library(knitr)
+```
+```{r load-data, message = FALSE, echo = FALSE}
+epl = read_csv("data/2021-2022.csv")
+laliga = read_csv("data/laliga-2018-2019.csv")
+```
+## Introduction
+Soccer (association football) is widely regarded as the world's most popular sport. At the professional level, players belong to a club team that participates in domestic competitions in a particular country. We focus on European (UEFA) soccer leagues for this case study. In particular, we consider matches from the Premier League (England) and La Liga (Spain). Each of these leagues are composed of 20 club teams, and the top four teams in each league qualify for the UEFA Champions League tournament which occurs during the next season. The fifth and sixth-place teams qualify for the UEFA Europa League tournament (second tier of European inter-league competition), while the seventh-place team qualifies for the UEFA Europa Conference League tournament (third tier of European inter-league competition; the Europa Conference League was first held during the 2021-2022 season, so the seventh-place team from the 2018-2019 season played in a knockout round for the right to compete in the UEFA Europa League tournament). 
+
+The objective of this project is to predict the league table (ranking all teams at the end of the season based on accumulated points) based on the results of each match in a given season. Unlike basketball, teams can tie in soccer, so the traditional Bradley-Terry model doesn't apply. In this project, we implement an extension of the basic Bradley-Terry model proposed by Davidson (1970).
+
+## Literature Review
+In looking at soccer data, we were interested in deriving relative ratings for teams whose pairwise match-ups can result in wins, losses, or ties. Bradley and Terry proposed a model in 1952 to understand an experiment in which $t$ treatments are being repeatedly compared to each other in a pairwise fashion under the assumption that true ratings $p_1, \dots, p_t$ of the treatments exist [@bradley1952rank]. In the case of soccer teams, $p_i$ can be interpreted as representing the skill of team $i$. Under the Bradley-Terry model, if treatments $i$ and $j$ are being compared, the probability that treatment $i$ wins over $j$ is: $$P(i \mid i,j) = \frac{p_i}{p_i + p_j}$$ where $P(i \mid i,j)$ indicates the probability of preferring $i$ over $j$ when presented with both. A likelihood function can be derived based on the number of comparisons made between each pair of treatments. The basic Bradley-Terry model does not allow for treatments to tie. Later work sought to extend the basic Bradley-Terry model to account for ties in a variety of ways. Two well-known extensions are those of Rao and Kupper (1967) and Davidson (1970).
+
+Rao and Kupper (1967) introduce an additional threshold parameter $\eta$ into the Bradley-Terry model to allow for ties [@rao1967ties]. They characterize these paired-comparison experiments as ones in which a judge or a panel of judges ranks pairs of treatments, and they describe $\eta$ as a threshold for what amount of genuine difference a judge can perceive where $\eta = 0$ reduces to the basic Bradley-Terry case [@rao1967ties]. When $\ln p_i - \ln p_j < \eta$, the judge cannot distinguish a difference in quality between $i$ and $j$ and declares a tie [@rao1967ties]. Letting $\theta = e^{\eta}$, this leads to preference probabilities, where $P(0 \mid i,j)$ indicates the probability of a tie when presented with $i$ and $j$: $$P(i \mid i,j) = \frac{p_i}{p_i + \theta p_j},\ P(j \mid i, j) = \frac{p_j}{\theta p_i + p_j}, \text{ and } P(0 \mid i,j) = \frac{p_i p_j (\theta^2 - 1)}{(p_i + \theta p_j)(\theta p_i + p_j)}.$$
+
+Davidson (1970) proposes a different extension of the Bradley-Terry model to account for ties [@davidson1970extending]. Davidson relates the probability of a tie given $i$, $j$ to the probabilities of either $i$ or $j$ winning given $i$ and $j$. He first notes that his model assumes that Luce's choice axiom holds, that is, that the probability of selecting $i$ over $j$ from among all $t$ treatments is not affected by the presence of other treatments beyond $i$ or $j$ [@davidson1970extending]. Since our $p$ values reflect an overall relative ranking, assuming that the choice axiom holds yields $$\frac{P(i \mid i,j)}{P(j \mid i,j)} = \frac{p_i}{p_j}$$ for all $(i,j)$ so long as $p(i \mid i,j) \neq 0$ [@davidson1970extending]. His model also assumes that the probability of a tie is proportional to the geometric mean of the probabilities of one team winning [@davidson1970extending]. That is, $$P(0 \mid i,j) = \alpha \sqrt{P(i \mid i,j) P(j \mid i,j)}$$ where $\alpha \geq 0$ is a proportionality constant independent of $i$ and $j$ that can be interpreted as an index of discrimination [@davidson1970extending]. Subject to an additional constraint that $P(i \mid i,j) + P(j \mid i,j) + P(0 \mid i,j) = 1$, Davidson was able to derive his preference probabilities which we will detail in our methodology. Davidson presents an intuitive extension to the Bradley-Terry model we implemented in class that we chose to explore in our implementation.
+
+Another approach is with the use of cumulative link models. In this case, wins, ties, and losses are treated as multinomial ordered outcomes [@tsokos2019modeling]. Cattelan et al. (2013) and Király and Qian (2017) have both used this approach to examine outcomes in soccer matches [@cattelan2013dynamic; @kiraly2017modelling].
+
+## Data
+We used two soccer datasets in this project: one on the English Premier League and one on the Spanish La Liga. The dataset on the English Premier League was found on [Kaggle](https://www.kaggle.com/datasets/saife245/english-premier-league?select=2021-2022.csv) and the dataset on the Spanish La Liga was also found on [Kaggle](https://www.kaggle.com/datasets/kishan305/la-liga-results-19952020) [@uddin2022epl; @kumar2021laliga]. We looked at the 2021-2022 season for the English Premier League and the 2018-2019 season for La Liga. We decided not to examine data from the pandemic years (2019-2020; 2020-2021) because COVID-19 could've affected training, tournament conditions (e.g., games were played in empty stadiums), and results. 
+
+In the English Premier League dataset, there were `r ncol(epl)` columns and `r nrow(epl)` rows. Since the original La Liga dataset was too large to push to GitHub, we first filtered the dataset to only the years 2018-2019. After this data processing, there were `r ncol(laliga)` columns and `r nrow(laliga)` rows. Each row represents a match between two teams in the league and three points are awarded for a win, one for a tie, and zero for a loss. A final league table is released at the end of a season where teams are ranked based on their cumulative point totals across the 38 games. Also, for both datasets, we used the columns `HomeTeam`, `AwayTeam`, and `FTR`, where the latter represents the full time tournament result: 'H' if it's a home win, 'D' if it's a draw, and 'A' if it's a home loss/away win. Using these data, we constructed matrices for the number of times team $i$ beats team $j$ at home, number of times team $i$ ties with team $j$ at home, and number of times team $i$ loses to team $j$ at home. 
+
+## Methodology
+### Mathematical Formulation
+We used Davidson's (1970) extension of the Bradley-Terry model for ties to model our soccer data. Davidson's model introduces two variables, $p = (p_1, \dots, p_t)$, a vector of $t$ values where $p_i, i \in \{1, 2, \dots, t\}$ is the rating for team $i$, and $\alpha$, our proportionality constant. Our probabilities are then:
+\begin{align*}
+P(l \mid i,j) &= \frac{p_l}{p_i + p_j + \alpha \sqrt{p_i p_j}},\quad l \in \{i,j\} \\
+P(0 \mid i,j) &= \frac{\alpha \sqrt{p_i p_j}}{p_i + p_j + \alpha \sqrt{p_i p_j}}.
+\end{align*}
+
+Let $a_{ij}$ be the number of games team $i$ won at home over $j$. Let $b_{ij}$ be the number of games $i$ tied at home with $j$, and let $c_{ij}$ be the number of games $i$ lost at home to $j$. Our likelihood is then: $$L(\alpha, p) = \prod_{i=1}^t \prod_{j=1}^t \left( \frac{p_i}{p_i + p_j + \alpha \sqrt{p_i p_j}} \right)^{a_{ij}} \left( \frac{\alpha \sqrt{p_i p_j}}{p_i + p_j + \alpha \sqrt{p_i p_j}} \right)^{b_{ij}} \left( \frac{p_j}{p_i + p_j + \alpha \sqrt{p_i p_j}} \right)^{c_{ij}}.$$
+This can be reformulated into the following log-likelihood:
+\begin{align*}
+  \log L(\alpha, p) &= \sum_{i = 1}^t \sum_{j = 1}^t \Biggl[ a_{ij} \log \left( \frac{p_i}{p_i + p_j + \alpha \sqrt{p_i p_j}} \right) + b_{ij} \log \left( \frac{\alpha \sqrt{p_i p_j}}{p_i + p_j + \alpha \sqrt{p_i p_j}} \right)\\
+  &\quad\quad + c_{ij} \log \left( \frac{p_j}{p_i + p_j + \alpha \sqrt{p_i p_j}} \right) \Biggr]\\
+  &= \sum_{i = 1}^t \sum_{j = 1}^t \Biggl[ \left(a_{ij} + \frac{b_{ij}}{2} \right) \log p_i + b_{ij} \log \alpha + \left( \frac{b_{ij}}{2} + c_{ij} \right) \log p_j\\
+  &\quad\quad - \left(a_{ij} + b_{ij} + c_{ij} \right) \log \left(p_i + p_j + \alpha \sqrt{p_i p_j} \right) \Biggr].
+\end{align*}
+
+We want to find the maximum likelihood estimates $\hat{p}_{MLE}$ and $\hat{\alpha}_{MLE}$ using the MM (minorize-maximize) algorithm. To do so, we first want to find a minorizing function $g$ for $\log L$. We first use supporting line minorization on the term $-\log \left(p_i + p_j + \alpha \sqrt{p_i p_j} \right)$:
+\begin{align*}
+  -\log \left(p_i + p_j + \alpha \sqrt{p_i p_j} \right) &\geq -\log \left( p_{n_i} + p_{n_j} + \alpha_n \sqrt{p_{n_i} p_{n_j}} \right)\\
+  &\quad\quad - \frac{\left( p_i + p_j + \alpha \sqrt{p_i p_j} \right) - \left( p_{n_i} + p_{n_j} + \alpha_n \sqrt{p_{n_i} p_{n_j}} \right)}{p_{n_i} + p_{n_j} + \alpha_n \sqrt{p_{n_i} p_{n_j}}}.
+\end{align*}
+We then used the arithmetic-geometric mean inequality detailed in Magnus and Neudecker (1988) and re-explicated in Hunter (2004) [@magnus1988matrix; @hunter2004mm]: $$-\sqrt{p_i p_j} \geq -\frac{p_i}{2} \sqrt{\frac{p_{n_j}}{p_{n_i}}} - \frac{p_j}{2} \sqrt{\frac{p_{n_i}}{p_{n_j}}}.$$
+Our surrogate function $g$ then takes the form:
+\begin{align*}
+  g(\alpha, p) &= \sum_{i = 1}^t \sum_{j = 1}^t \Biggl[ \left(a_{ij} + \frac{b_{ij}}{2} \right) \log p_i + b_{ij} \log \alpha + \left( \frac{b_{ij}}{2} + c_{ij} \right) \log p_j\\
+  &\quad\quad - \left(a_{ij} + b_{ij} + c_{ij} \right) \log \left(p_{n_i} + p_{n_j} + \alpha_n \sqrt{p_{n_i} p_{n_j}} \right) - \left(\frac{a_{ij} + b_{ij} + c_{ij}}{p_{n_i} + p_{n_j} + \alpha_n \sqrt{p_{n_i} p_{n_j}}} \right) p_i\\
+  &\quad\quad - \left(\frac{a_{ij} + b_{ij} + c_{ij}}{p_{n_i} + p_{n_j} + \alpha_n \sqrt{p_{n_i} p_{n_j}}} \right) p_j - \alpha \left(\frac{a_{ij} + b_{ij} + c_{ij}}{p_{n_i} + p_{n_j} + \alpha_n \sqrt{p_{n_i} p_{n_j}}} \right) \left( \frac{p_i}{2} \sqrt{\frac{p_{n_j}}{p_{n_i}}} + \frac{p_j}{2} \sqrt{\frac{p_{n_i}}{p_{n_j}}} \right)\\
+  &\quad\quad + \left(a_{ij} + b_{ij} + c_{ij} \right) \Biggr].
+\end{align*}
+
+We can now find our iterative updates by setting $\nabla g = 0$.
+\begin{align*}
+  &\frac{\partial}{\partial \alpha} g(\alpha, p) = \sum_{i = 1}^t \sum_{j = 1}^t \Biggl[ \frac{b_{ij}}{\alpha} - \left( \frac{a_{ij} + b_{ij} + c_{ij}}{p_{n_i} + p_{n_j} + \alpha_n \sqrt{p_{n_i} p_{n_j}}} \right) \left( \frac{p_i}{2} \sqrt{\frac{p_{n_j}}{p_{n_i}}} + \frac{p_j}{2} \sqrt{\frac{p_{n_i}}{p_{n_j}}} \right) \Biggr]\\
+  \implies &\alpha_{n+1} = \frac{\sum_{i = 1}^t \sum_{j = 1}^t b_{ij}}{\sum_{i = 1}^t \sum_{j = 1}^t \left( \frac{a_{ij} + b_{ij} + c_{ij}}{p_{n_i} + p_{n_j} + \alpha_n \sqrt{p_{n_i} p_{n_j}}} \right) \sqrt{p_{n_j} p_{n_i}}}\\
+\end{align*}
+Let $i \in \{1, 2, \dots, t\}$, thus letting $p_i$ be the rating corresponding to team $i$. Note that this fixed $i$ is distinct from the iterative $i$ and $j$ in our general formulation.
+\begin{align*}
+  &\frac{\partial}{\partial p_i} g(\alpha, p) = \sum_{j = 1}^t \Biggl[ \frac{a_{ij} + \frac{b_{ij}}{2}}{p_i} - \frac{a_{ij} + b_{ij} + c_{ij}}{p_{n_i} + p_{n_j} + \alpha_n \sqrt{p_{n_i} p_{n_j}}} - \frac{\alpha}{2} \sqrt{\frac{p_{n_j}}{p_{n_i}}} \left( \frac{a_{ij} + b_{ij} + c_{ij}}{p_{n_i} + p_{n_j} + \alpha_n \sqrt{p_{n_i} p_{n_j}}} \right) \Biggr]\\
+  &\quad\quad\quad\quad\quad + \sum_{j = 1}^t \Biggl[ \frac{c_{ji} + \frac{b_{ji}}{2}}{p_i} - \frac{a_{ji} + b_{ji} + c_{ji}}{p_{n_j} + p_{n_i} + \alpha_n \sqrt{p_{n_j} p_{n_i}}} - \frac{\alpha}{2} \sqrt{\frac{p_{n_j}}{p_{n_i}}} \left( \frac{a_{ji} + b_{ji} + c_{ji}}{p_{n_j} + p_{n_i} + \alpha_n \sqrt{p_{n_j} p_{n_i}}} \right) \Biggr]\\
+  \implies &p_{{n+1}_i} = \frac{\sum\limits_{j = 1}^t \left[ a_{ij} + \frac{b_{ij}}{2} + c_{ji} + \frac{b_{ji}}{2} \right]}{\sum\limits_{j = 1}^n \left[ \frac{a_{ij} + b_{ij} + c_{ij}}{p_{n_i} + p_{n_j} + \alpha_n \sqrt{p_{n_i} p_{n_j}}} + \frac{\alpha}{2} \sqrt{\frac{p_{n_j}}{p_{n_i}}} \left(\frac{a_{ij} + b_{ij} + c_{ij}}{p_{n_i} + p_{n_j} + \alpha_n \sqrt{p_{n_i} p_{n_j}}} + \frac{a_{ji} + b_{ji} + c_{ji}}{p_{n_j} + p_{n_i} + \alpha_n \sqrt{p_{n_j} p_{n_i}}} \right) + \frac{a_{ji} + b_{ji} + c_{ji}}{p_{n_j} + p_{n_i} + \alpha_n \sqrt{p_{n_j} p_{n_i}}} \right]}
+\end{align*}
+
+We can then implement our MM algorithm to estimate $\hat{p}_{MLE}$ and $\hat{\alpha}_{MLE}$ using these updates.
+
+### Code 
+#### English Premier League:
+
+We first wrote code to calculate matrices for our constants `a`, `b`, and `c`, then defined a general modified Bradley-Terry with ties function named `mod_bradley_terry`. The implementation of our function is shown below.
+```{r data-processing, message = FALSE, echo = FALSE}
+a_s_epl = epl %>% # home team wins
+  filter(FTR == "H") %>%
+  count(HomeTeam, AwayTeam) %>%
+  pivot_wider(names_from = AwayTeam,
+              values_from = n,
+              values_fill = 0) %>% 
+  select(-HomeTeam) %>%
+  as.matrix()
+a_s_epl = a_s_epl[, order(colnames(a_s_epl))]
+
+b_s_epl = epl %>% # ties
+  filter(FTR == "D") %>%
+  count(HomeTeam, AwayTeam) %>%
+  pivot_wider(names_from = AwayTeam,
+              values_from = n,
+              values_fill = 0) %>% 
+  select(-HomeTeam) %>%
+  as.matrix()
+b_s_epl = b_s_epl[, order(colnames(b_s_epl))]
+
+c_s_epl_top = epl %>% # away team wins
+  filter(FTR == "A") %>%
+  count(HomeTeam, AwayTeam) %>%
+  pivot_wider(names_from = AwayTeam,
+              values_from = n,
+              values_fill = 0) %>%
+  head(10)
+
+c_s_epl_bottom = epl %>%
+  filter(FTR == "A") %>%
+  count(HomeTeam, AwayTeam) %>%
+  pivot_wider(names_from = AwayTeam,
+              values_from = n,
+              values_fill = 0) %>%
+  tail(9)
+
+# bc Liverpool didn't have any losses at home
+c_s_epl_top[11, ] = list("Liverpool", 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+                     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+
+c_s_epl = rbind(c_s_epl_top, c_s_epl_bottom) %>%
+  select(-HomeTeam) %>%
+  as.matrix()
+c_s_epl = c_s_epl[, order(colnames(c_s_epl))]
+```
+```{r modified-bradley-terry-for-ties}
+mod_bradley_terry = function(alpha_0, p_0, num_iter, a_s, b_s, c_s) {
+  if (!is.numeric(alpha_0) | alpha_0 < 0) {
+    stop("Invalid input: alpha should be numeric >= 0")
+  } else if (!is.numeric(p_0)) {
+    stop("Invalid input: p0 values should be numeric")
+  } else if (!is.numeric(num_iter)){
+    stop("Invalid input: num_iter should be numeric")
+  } else if (!is.numeric(a_s) | !is.numeric(b_s) | !is.numeric(c_s)) {
+    stop("Invalid input: constant matrics a, b, c should be numeric")
+  }
+
+  cur_alpha = alpha_0
+  cur_p = p_0
+  
+  for (iter in 1:num_iter) {
+    numerator = 0
+    denominator = 0
+    for (i in 1:nrow(b_s)) {
+      for (j in 1:ncol(b_s)) {
+        numerator = numerator + b_s[i, j]
+        
+        denominator = denominator + 
+          ((a_s[i, j] + b_s[i, j] + c_s[i, j]) * sqrt(cur_p[i] * cur_p[j]) / 
+             (cur_p[i] + cur_p[j] + cur_alpha * sqrt(cur_p[i] * cur_p[j])))
+      }
+    }
+    cur_alpha = numerator / denominator # update alpha 
+    
+    for (i in 1:nrow(a_s)) {
+      numerator2 = 0
+      denominator2 = 0
+      denominator2pt1 = 0
+      denominator2pt2 = 0
+      
+      for (j in 1:nrow(a_s)) {
+        numerator2 = numerator2 + 
+          a_s[i, j] + (b_s[i, j] / 2) + (b_s[j, i] / 2) + c_s[j, i]
+        
+        denominator2pt1 = denominator2pt1 +
+          ((a_s[i, j] + b_s[i, j] + c_s[i, j]) /
+             (cur_p[i] + cur_p[j] + cur_alpha * sqrt(cur_p[i] * cur_p[j]))) +
+          (a_s[j, i] + b_s[j, i] + c_s[j, i]) /
+          (cur_p[i] + cur_p[j] + cur_alpha * sqrt(cur_p[i] * cur_p[j]))
+        
+        denominator2pt2 = denominator2pt2 +
+          (cur_alpha / 2) * 
+          ((sqrt(cur_p[j] / cur_p[i]) * 
+              ((a_s[i, j] + b_s[i, j] + c_s[i, j]) /
+                 (cur_p[i] + cur_p[j] + cur_alpha * sqrt(cur_p[i] * cur_p[j]))))
+           + (sqrt(cur_p[j] / cur_p[i]) * (a_s[j, i] + b_s[j, i] + c_s[j, i]) /
+                (cur_p[i] + cur_p[j] + cur_alpha * sqrt(cur_p[i] * cur_p[j]))))
+        
+        denominator2 = denominator2pt1 + denominator2pt2
+      }
+      cur_p[i] = numerator2 / denominator2 # update p (ranking param)
+    }
+  }
+  return (list(alpha_mle = round(cur_alpha, 3), p_mle = cur_p))
+}
+```
+We then ran our modified Bradley-Terry over a sequence of different starting $\alpha$ values, which is shown below. From this we created tables for $\hat{p}_{MLE}$.
+```{r run-mod-brad-terry-epl}
+alpha_0 = seq(0, 1, by = 0.1) # testing different starting alpha values
+p_0 = rep(1, ncol(a_s_epl))
+num_iter = 100
+
+p_mles = as.data.frame(matrix(nrow = length(alpha_0), ncol = ncol(a_s_epl)))
+
+for (i in seq_along(alpha_0)) { # get p mle's (ranking param) for diff alphas
+  p_mle = mod_bradley_terry(alpha_0[i], p_0, num_iter, 
+                            a_s_epl, b_s_epl, c_s_epl)[[2]]
+  p_mles[i,] = p_mle
+}
+
+p_mle = colMeans(p_mles) %>% as.vector() # got mean of p mle's
+# source: https://www.geeksforgeeks.org/how-to-find-mean-of-dataframe-column-in-r/
+
+alpha_mles = c() 
+for (i in seq_along(alpha_0)) { # get alpha mle 
+  alpha_mle = mod_bradley_terry(alpha_0[i], p_0, num_iter,
+                                a_s_epl, b_s_epl, c_s_epl)[[1]]
+  alpha_mle = alpha_mle[[1]]
+  alpha_mles = append(alpha_mles, alpha_mle)
+}
+```
+```{r all-teams-rank, echo = FALSE}
+all_p_epl = sort(p_mle, decreasing = TRUE)[1:ncol(a_s_epl)]
+
+team_names_epl = epl %>% select(HomeTeam) %>% unique() %>% as.data.frame()
+team_names_epl_in_order_epl = team_names_epl[order(team_names_epl$HomeTeam),]
+
+all_teams_epl = c()
+all_team_names_epl = c()
+for (i in 1:ncol(a_s_epl)) {
+  all_teams_epl = append(all_teams_epl, which(p_mle == all_p_epl[i]))
+  all_team_names_epl = append(all_team_names_epl, 
+                              team_names_epl_in_order_epl[all_teams_epl[i]])
+}
+
+# make table showing team rankings and their p hat MLE values
+all_ranked_table_epl = as.data.frame(matrix(nrow = ncol(a_s_epl), ncol = 3))
+all_ranked_table_epl$V1 = seq(1, ncol(a_s_epl))
+all_ranked_table_epl$V2 = all_team_names_epl
+all_ranked_table_epl$V3 = round(all_p_epl, 3)
+
+names(all_ranked_table_epl)[1] = "rank"
+names(all_ranked_table_epl)[2] = "team name"
+names(all_ranked_table_epl)[3] = "p-hat"
+```
+We performed a similar process for the La Liga data, first calculating matrices for our constants `a`, `b`, and `c`, then running our modified Bradley-Terry over a sequence of starting $\alpha$ values before creating tables. In our code we referenced: [@geeks4geeks], [@Mael].
+```{r la-liga-dataset, message = FALSE, echo = FALSE}
+a_s_ll = laliga %>% 
+  filter(FTR == "H") %>%
+  count(HomeTeam, AwayTeam) %>%
+  pivot_wider(names_from = AwayTeam,
+              values_from = n,
+              values_fill = 0) %>% 
+  select(-HomeTeam) %>%
+  as.matrix()
+a_s_ll = a_s_ll[, order(colnames(a_s_ll))]
+
+b_s_ll = laliga %>% 
+  filter(FTR == "D") %>%
+  count(HomeTeam, AwayTeam) %>%
+  pivot_wider(names_from = AwayTeam,
+              values_from = n,
+              values_fill = 0) %>% 
+  select(-HomeTeam) %>%
+  as.matrix()
+b_s_ll = b_s_ll[, order(colnames(b_s_ll))]
+
+c_s_ll = laliga %>%
+  filter(FTR == "A") %>%
+  count(HomeTeam, AwayTeam) %>%
+  pivot_wider(names_from = AwayTeam,
+              values_from = n,
+              values_fill = 0) %>% 
+  select(-HomeTeam) %>%
+  as.matrix()
+c_s_ll = c_s_ll[, order(colnames(c_s_ll))]
+```
+```{r run-mod-brad-terry-la-liga, echo = FALSE}
+alpha_0_ll = seq(0, 1, by = 0.1)
+p_0_ll = rep(1, ncol(a_s_ll))
+num_iter = 100
+
+p_mles_2 = as.data.frame(matrix(nrow = length(alpha_0_ll), ncol = ncol(a_s_ll)))
+
+for (i in seq_along(alpha_0_ll)) { # get p mle's (ranking param) for diff alphas
+  p_mle = mod_bradley_terry(alpha_0_ll[i], p_0_ll, num_iter, 
+                            a_s_ll, b_s_ll, c_s_ll)[[2]] 
+  p_mles_2[i,] = p_mle # values change bc a_s_ll, b_s_ll, and c_s_ll dep. on data
+}
+
+p_mle = colMeans(p_mles_2) %>% as.vector() # got mean of p mle's
+
+alpha_mles_2 = c()
+for (i in seq_along(alpha_0_ll)) { # get alpha mle 
+  alpha_mle = mod_bradley_terry(alpha_0_ll[i], p_0_ll, num_iter,
+                                a_s_ll, b_s_ll, c_s_ll)[[1]]
+  alpha_mle = alpha_mle[[1]]
+  alpha_mles_2 = append(alpha_mles_2, alpha_mle)
+}
+```
+```{r la-liga-all-clubs-rank, echo = FALSE}
+top_20_p_ll = sort(p_mle, decreasing = TRUE)[1:ncol(a_s_ll)]
+
+team_names = laliga %>% select(HomeTeam) %>% unique() %>% as.data.frame()
+team_names_in_order = team_names[order(team_names$HomeTeam),]
+
+top_20_teams_ll = c()
+top_20_team_names_ll = c()
+for (i in 1:ncol(a_s_ll)) {
+  top_20_teams_ll = append(top_20_teams_ll, which(p_mle == top_20_p_ll[i]))
+  top_20_team_names_ll = append(top_20_team_names_ll, 
+                              team_names_in_order[top_20_teams_ll[i]])
+}
+
+# make table showing team rankings and their p hat MLE values
+top_20_ll_ranked_table = as.data.frame(matrix(nrow = ncol(a_s_ll), ncol = 3))
+top_20_ll_ranked_table$V1 = seq(1, ncol(a_s_ll))
+top_20_ll_ranked_table$V2 = top_20_team_names_ll
+top_20_ll_ranked_table$V3 = round(top_20_p_ll, 3)
+
+names(top_20_ll_ranked_table)[1] = "rank"
+names(top_20_ll_ranked_table)[2] = "club name"
+names(top_20_ll_ranked_table)[3] = "p-hat"
+```
+
+## Results and Discussion
+We ran the minorization-maximization (MM) algorithm updates for 100 steps (updated each element of $\alpha$ and $p$ 100 times). For the English Premier League, the top seven teams from our MM algorithm and the actual rankings line up perfectly [@eurosportepl]. Moreover, two of the three teams that were relegated to the English Football League Championship were identified correctly. There are minor discrepancies in the middle, but in general, the ordering from our algorithm is reasonable given the true results. For La Liga, the top six teams from our MM algorithm and the actual rankings line up perfectly (and the seventh-place and eighth-place teams are swapped due to tiebreaks), and the bottom three teams from our MM algorithm and the actual rankings line up perfectly [@fishylaliga]. There are discrepancies primarily due to tiebreaks (i.e. teams tied on points are sometimes ordered incorrectly), but in general, the predicted rankings align closely with the actual league table. This is a fantastic result since the top seven and bottom three positions of the league table (in these specific leagues; the number of teams who qualify for the UEFA Champions League varies from league to league) are arguably the most important. Teams that finish in the top seven positions qualify for UEFA's inter-league tournaments and have the opportunity to earn additional revenue. On the other hand, since the first tier of the sport (Premier League, La Liga) has the most television and media coverage (major revenue stream), teams that finish in the bottom three are relegated to the lower divisions and face severe financial repercussions (e.g. have to sell their best players).
+
+To show the robustness of our algorithm, we ran it on different initial $\alpha$ values (from 0 to 1, at increasing increments of 0.1), where $\alpha$ is linearly related to the odds of tying. The $\hat{p}_{\text{MLE}}$ values were all within 0.01 of each other and did not affect the rankings of the teams. The $\hat{\alpha}_{\text{MLE}}$ values for the Premier League and La Liga data were 0.762 and 0.921 respectively.
+\newpage
+```{r tables-of-results, echo = FALSE}
+#| layout-ncol: 2
+#| tbl-cap: Team Rankings Tables
+#| tbl-subcap: ["Premier League Rankings 2021-2022", "La Liga Rankings 2018-2019"]
+kable(all_ranked_table_epl)
+kable(top_20_ll_ranked_table)
+# source: https://stackoverflow.com/questions/38036680/align-multiple-tables-side-by-side
+```
+
+## Conclusion and Next Steps
+Our MM algorithm does a good job at ranking teams in the Premier League and La Liga, and this is an extension of the Bradley-Terry model to soccer data where ties can occur between teams. In the future, we can explore other MM techniques, such as with cumulative link models, to evaluate the performance of the model, as discussed in the literature review. Also, we can consider models that allow for ties and account for home stadium advantage. Finally, we can examine data on the leagues in different years and explore how teams' performances and rankings have changed over time. We understand that there are many factors associated with team rankings, such as team composition, coaching, training resources, and these may be interesting to explore with ordinal logistic regression models. 
+
+Helen wrote out the math formulation for the model, Naga and Carolyn checked it over, Helen implemented the model in R and made the algorithm robust; Carolyn wrote the literature review, wrote the math formulation in latex, and did citations in bibtex; Naga checked over Helen’s code implementation and wrote the introduction, discussion, and README. 
+
+## References
